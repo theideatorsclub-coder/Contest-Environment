@@ -1,0 +1,66 @@
+generator client {
+  provider = "prisma-client-py"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String?
+  role      String   @default("STUDENT")
+  createdAt DateTime @default(now())
+}
+
+model Problem {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  difficulty  String   // "Easy", "Medium", "Hard"
+  createdAt   DateTime @default(now())
+}
+
+model TestCase {
+  id             String  @id @default(uuid())
+  problemId      String
+  input          String
+  expectedOutput String
+  isHidden       Boolean @default(true)
+}
+
+model Submission {
+  id            String   @id @default(uuid())
+  code          String
+  languageId    Int
+  status        String   @default("PENDING") 
+  judge0Token   String?
+  problemId     String
+  userId        String
+  contestId     String?
+  stdout        String?
+  stderr        String?
+  compileOutput String?
+  executionTime String?
+  memory        Int?
+  createdAt     DateTime @default(now())
+}
+
+model Contest {
+  id          String   @id @default(uuid())
+  title       String
+  description String
+  startTime   DateTime
+  endTime     DateTime
+  createdAt   DateTime @default(now())
+}
+
+model ContestProblem {
+  id        String @id @default(uuid())
+  contestId String
+  problemId String
+  points    Int    @default(100)
+}
