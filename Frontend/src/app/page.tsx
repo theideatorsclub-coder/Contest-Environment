@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 interface ContestPreview {
   id: string;
@@ -54,7 +58,11 @@ export default function Home() {
   useEffect(() => {
     async function fetchContest() {
       try {
+<<<<<<< HEAD
         const res = await fetch("http://localhost:8000/contests");
+=======
+        const res = await fetch(`${API_BASE_URL}/contests`);
+>>>>>>> vaidehi-local
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {

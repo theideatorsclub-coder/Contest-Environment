@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import Navbar from "@/components/Navbar";
 import AuthGuard from "@/components/AuthGuard";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 interface LeaderboardUser {
   rank: number;
@@ -27,7 +31,11 @@ export default function LeaderboardPage() {
   useEffect(() => {
     async function fetchLeaderboard() {
       try {
+<<<<<<< HEAD
         const res = await fetch("http://localhost:8000/leaderboard", { cache: "no-store" });
+=======
+        const res = await fetch(`${API_BASE_URL}/leaderboard`, { cache: "no-store" });
+>>>>>>> vaidehi-local
         if (res.ok) {
           const data = await res.json();
           if (data.leaderboard && data.leaderboard.length > 0) {
@@ -137,6 +145,10 @@ export default function LeaderboardPage() {
             ))}
           </div>
         </div>
+<<<<<<< HEAD
+=======
+      </div>
+>>>>>>> vaidehi-local
       </main>
     </AuthGuard>
   );

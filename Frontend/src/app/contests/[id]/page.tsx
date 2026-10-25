@@ -5,6 +5,10 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import AuthGuard from "@/components/AuthGuard";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 interface ContestProblem {
   id: string;
@@ -47,8 +51,13 @@ export default function ContestArenaPage() {
     async function loadContestData() {
       try {
         const [contestRes, standingsRes] = await Promise.all([
+<<<<<<< HEAD
           fetch(`http://localhost:8000/contests/${contestId}`),
           fetch(`http://localhost:8000/contests/${contestId}/leaderboard`),
+=======
+          fetch(`${API_BASE_URL}/contests/${contestId}`),
+          fetch(`${API_BASE_URL}/contests/${contestId}/leaderboard`),
+>>>>>>> vaidehi-local
         ]);
 
         if (contestRes.ok) {
