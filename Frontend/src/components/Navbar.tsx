@@ -3,6 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 export interface UserState {
   email: string;
@@ -72,7 +76,11 @@ export default function Navbar() {
     setAuthError("");
 
     try {
+<<<<<<< HEAD
       const res = await fetch("http://localhost:8000/login", {
+=======
+      const res = await fetch(`${API_BASE_URL}/login`, {
+>>>>>>> vaidehi-local
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password }),

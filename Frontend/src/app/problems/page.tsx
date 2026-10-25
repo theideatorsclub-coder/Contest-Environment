@@ -4,6 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import AuthGuard from "@/components/AuthGuard";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 interface Problem {
   id: string;
@@ -65,7 +69,11 @@ export default function ProblemsPage() {
   useEffect(() => {
     async function fetchProblems() {
       try {
+<<<<<<< HEAD
         const res = await fetch("http://localhost:8000/problems", { cache: "no-store" });
+=======
+        const res = await fetch(`${API_BASE_URL}/problems`, { cache: "no-store" });
+>>>>>>> vaidehi-local
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
@@ -209,6 +217,10 @@ export default function ProblemsPage() {
             )}
           </div>
         </div>
+<<<<<<< HEAD
+=======
+      </div>
+>>>>>>> vaidehi-local
       </main>
     </AuthGuard>
   );

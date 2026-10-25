@@ -5,6 +5,10 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import AuthGuard from "@/components/AuthGuard";
+<<<<<<< HEAD
+=======
+import { API_BASE_URL } from "@/lib/api";
+>>>>>>> vaidehi-local
 
 interface SampleTestCase {
   input: string;
@@ -95,7 +99,11 @@ export default function ContestProblemWorkspacePage() {
   useEffect(() => {
     async function loadProblem() {
       try {
+<<<<<<< HEAD
         const res = await fetch(`http://localhost:8000/problems/${problemId}`);
+=======
+        const res = await fetch(`${API_BASE_URL}/problems/${problemId}`);
+>>>>>>> vaidehi-local
         if (res.ok) {
           const data = await res.json();
           setProblem(data);
@@ -129,7 +137,11 @@ export default function ContestProblemWorkspacePage() {
     setExecutionResult({ status: "Testing against runner...", stdout: "" });
 
     try {
+<<<<<<< HEAD
       const res = await fetch("http://localhost:8000/run", {
+=======
+      const res = await fetch(`${API_BASE_URL}/run`, {
+>>>>>>> vaidehi-local
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -165,7 +177,11 @@ export default function ContestProblemWorkspacePage() {
     }
 
     try {
+<<<<<<< HEAD
       const res = await fetch("http://localhost:8000/submit", {
+=======
+      const res = await fetch(`${API_BASE_URL}/submit`, {
+>>>>>>> vaidehi-local
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -189,7 +205,11 @@ export default function ContestProblemWorkspacePage() {
       const pollInterval = setInterval(async () => {
         attempts++;
         try {
+<<<<<<< HEAD
           const pollRes = await fetch(`http://localhost:8000/submissions/${submissionId}`);
+=======
+          const pollRes = await fetch(`${API_BASE_URL}/status/${submissionId}`);
+>>>>>>> vaidehi-local
           if (pollRes.ok) {
             const pollData = await pollRes.json();
             if (pollData.status !== "PENDING" && pollData.status !== "PROCESSING") {
@@ -476,6 +496,10 @@ export default function ContestProblemWorkspacePage() {
           </div>
         </div>
       </div>
+<<<<<<< HEAD
+=======
+      </div>
+>>>>>>> vaidehi-local
     </AuthGuard>
   );
 }
