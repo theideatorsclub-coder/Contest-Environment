@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { apiFetchSafe, apiFetch } from "@/lib/api";
+import { apiFetchSafe, apiFetch, getAuthToken } from "@/lib/api";
 import type { ContestDetail, ContestLeaderboard, Problem } from "@/lib/types";
 import {
-  LoadingSpinner, EmptyState, StatusBadge, DifficultyBadge, ErrorBanner,
+  LoadingSpinner, EmptyState, StatusBadge, DifficultyBadge, ErrorBanner, SuccessBanner, Toast,
 } from "@/components/admin/AdminUI";
 
 export default function AdminContestDetailPage() {
@@ -19,7 +19,7 @@ export default function AdminContestDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAddProblem, setShowAddProblem] = useState(false);
-  const [toast, setToast] = useState("");
+  const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
 
   async function loadData() {
     const [cData, lbData, pData] = await Promise.all([
@@ -39,10 +39,22 @@ export default function AdminContestDetailPage() {
   }, [contestId]);
 
   async function handleAddProblem(pid: string) {
-    // Backend does not have a dedicated "add problem to contest" endpoint.
-    // We document this as a missing endpoint. The contest detail view is read-only for problems.
-    setToast("Adding problems to an existing contest requires a backend endpoint (PUT /admin/contests/{id}/problems). Not yet available.");
-    setTimeout(() => setToast(""), 5000);
+    const currentIds = contest!.problems.map((p) => p.id);
+    if (currentIds.includes(pid)) return;
+    const newIds = [...currentIds, pid];
+    try {
+      await apiFetch(`/admin/contests/${contestId}/problems`, {
+        method: "PUT",
+        body: JSON.stringify({ problem_ids: newIds }),
+        token: getAuthToken(),
+      });
+      setToast({ msg: `Problem added successfully.`, type: "success" });
+      setShowAddProblem(false);
+      loadData();
+    } catch (err: any) {
+      setToast({ msg: err.message || "Failed to add problem.", type: "error" });
+    }
+    setTimeout(() => setToast(null), 3000);
   }
 
   if (loading) return <LoadingSpinner label="Loading contest..." />;
@@ -104,7 +116,7 @@ export default function AdminContestDetailPage() {
       </div>
 
       {toast && (
-        <div className="mt-4"><ErrorBanner message={toast} /></div>
+        <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />
       )}
 
       {/* Problems in Contest */}

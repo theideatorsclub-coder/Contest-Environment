@@ -2,6 +2,9 @@ import asyncio
 import json
 import os
 import uuid
+import subprocess
+import tempfile
+import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 
@@ -33,6 +36,177 @@ JUDGE0_URL = os.getenv(
     "JUDGE0_URL",
     "http://127.0.0.1:2358"
 )
+
+# CORS: comma-separated origins, default to localhost dev ports
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001").split(",")
+    if o.strip()
+]
+
+# Mock judge mode: set JUDGE0_URL=mock in .env to run code locally without Docker/Judge0
+MOCK_JUDGE = JUDGE0_URL == "mock"
+
+# Language config for mock judge
+MOCK_LANGS = {
+    71: {"name": "Python 3", "ext": ".py", "cmd": ["python"], "type": "interpreted"},
+    63: {"name": "JavaScript", "ext": ".js", "cmd": ["node"], "type": "interpreted"},
+    54: {"name": "C++ (GCC)", "ext": ".cpp", "cmd": ["g++"], "type": "compiled", "run_cmd": None},
+    50: {"name": "C (GCC)", "ext": ".c", "cmd": ["gcc"], "type": "compiled", "run_cmd": None},
+    62: {"name": "Java", "ext": ".java", "cmd": ["javac"], "type": "java", "run_cmd": ["java"]},
+}
+
+
+def mock_execute(source_code: str, language_id: int, stdin: str, timeout: int = 10):
+    """
+    Run code locally via subprocess. DEV ONLY — no sandboxing.
+    Returns a dict matching Judge0's response shape.
+    """
+    lang = MOCK_LANGS.get(language_id)
+    if not lang:
+        return {
+            "status": {"description": "Compilation Error"},
+            "stdout": None,
+            "stderr": f"Mock judge supports: {list(MOCK_LANGS.keys())}. Got language_id={language_id}",
+            "compile_output": None,
+            "time": None,
+            "memory": None,
+        }
+
+    import time as _time
+
+    # ── Interpreted languages (Python, JavaScript) ──
+    if lang["type"] == "interpreted":
+        interpreter = shutil.which(lang["cmd"][0])
+        if not interpreter:
+            return {
+                "status": {"description": "Compilation Error"},
+                "stdout": None,
+                "stderr": f"'{lang['cmd'][0]}' not found. Install {lang['name']}.",
+                "compile_output": None, "time": None, "memory": None,
+            }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=lang["ext"], delete=False, encoding="utf-8") as f:
+            f.write(source_code)
+            tmp_path = f.name
+        try:
+            start = _time.time()
+            proc = subprocess.run([interpreter, tmp_path], input=stdin, capture_output=True, text=True, timeout=timeout)
+            elapsed = _time.time() - start
+            return _build_result(proc, elapsed)
+        except subprocess.TimeoutExpired:
+            return _timeout_result(timeout)
+        except Exception as e:
+            return _error_result(str(e))
+        finally:
+            os.unlink(tmp_path)
+
+    # ── Compiled languages (C, C++) ──
+    elif lang["type"] == "compiled":
+        compiler = shutil.which(lang["cmd"][0])
+        if not compiler:
+            return {
+                "status": {"description": "Compilation Error"},
+                "stdout": None,
+                "stderr": f"'{lang['cmd'][0]}' not found. Install {lang['name']}.",
+                "compile_output": None, "time": None, "memory": None,
+            }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=lang["ext"], delete=False, encoding="utf-8") as f:
+            f.write(source_code)
+            src_path = f.name
+        exe_path = src_path + ".exe"
+        try:
+            # Compile
+            start = _time.time()
+            compile_proc = subprocess.run([compiler, "-o", exe_path, src_path, "-std=c++17"], capture_output=True, text=True, timeout=timeout)
+            if compile_proc.returncode != 0:
+                return {
+                    "status": {"description": "Compilation Error"},
+                    "stdout": None, "stderr": None,
+                    "compile_output": compile_proc.stderr,
+                    "time": None, "memory": None,
+                }
+            # Run
+            run_proc = subprocess.run([exe_path], input=stdin, capture_output=True, text=True, timeout=timeout)
+            elapsed = _time.time() - start
+            return _build_result(run_proc, elapsed)
+        except subprocess.TimeoutExpired:
+            return _timeout_result(timeout)
+        except Exception as e:
+            return _error_result(str(e))
+        finally:
+            for p in [src_path, exe_path]:
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    # ── Java ──
+    elif lang["type"] == "java":
+        javac = shutil.which("javac")
+        java_bin = shutil.which("java")
+        if not javac or not java_bin:
+            return {
+                "status": {"description": "Compilation Error"},
+                "stdout": None,
+                "stderr": "javac/java not found. Install JDK.",
+                "compile_output": None, "time": None, "memory": None,
+            }
+        # Java requires the file to be named Main.java if the class is Main
+        java_dir = tempfile.mkdtemp()
+        java_file = os.path.join(java_dir, "Main.java")
+        with open(java_file, "w", encoding="utf-8") as f:
+            f.write(source_code)
+        try:
+            # Compile
+            start = _time.time()
+            compile_proc = subprocess.run([javac, java_file], capture_output=True, text=True, timeout=timeout, cwd=java_dir)
+            if compile_proc.returncode != 0:
+                return {
+                    "status": {"description": "Compilation Error"},
+                    "stdout": None, "stderr": None,
+                    "compile_output": compile_proc.stderr,
+                    "time": None, "memory": None,
+                }
+            # Run
+            run_proc = subprocess.run([java_bin, "-cp", java_dir, "Main"], input=stdin, capture_output=True, text=True, timeout=timeout)
+            elapsed = _time.time() - start
+            return _build_result(run_proc, elapsed)
+        except subprocess.TimeoutExpired:
+            return _timeout_result(timeout)
+        except Exception as e:
+            return _error_result(str(e))
+        finally:
+            shutil.rmtree(java_dir, ignore_errors=True)
+
+    return _error_result("Unknown language type")
+
+
+def _build_result(proc, elapsed):
+    if proc.returncode == 0:
+        return {
+            "status": {"description": "Accepted"},
+            "stdout": proc.stdout, "stderr": None, "compile_output": None,
+            "time": f"{elapsed:.3f}", "memory": None,
+        }
+    return {
+        "status": {"description": "Runtime Error"},
+        "stdout": proc.stdout, "stderr": proc.stderr, "compile_output": None,
+        "time": f"{elapsed:.3f}", "memory": None,
+    }
+
+
+def _timeout_result(timeout):
+    return {
+        "status": {"description": "Time Limit Exceeded"},
+        "stdout": None, "stderr": f"Execution timed out after {timeout}s",
+        "compile_output": None, "time": None, "memory": None,
+    }
+
+
+def _error_result(msg):
+    return {
+        "status": {"description": "Runtime Error"},
+        "stdout": None, "stderr": str(msg), "compile_output": None,
+        "time": None, "memory": None,
+    }
 
 REDIS_URL = os.getenv(
     "REDIS_URL",
@@ -247,7 +421,7 @@ app = FastAPI(
 # --------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -339,7 +513,9 @@ async def health_check():
         except Exception:
             redis_ok = False
 
-    if http_client:
+    if MOCK_JUDGE:
+        judge0_ok = True  # mock judge is always "available"
+    elif http_client:
         try:
             response = await http_client.get(f"{JUDGE0_URL}/languages", timeout=4)
             judge0_ok = response.is_success
@@ -350,7 +526,8 @@ async def health_check():
         "status": "ok",
         "service": "TIC Contest Platform API",
         "redis": redis_ok,
-        "judge0": judge0_ok
+        "judge0": judge0_ok,
+        "mode": "mock" if MOCK_JUDGE else "production"
     }
 
 
@@ -382,6 +559,23 @@ async def register_user(user: UserCreate):
 
 @app.post("/login")
 async def login_user(user: UserLogin):
+    # Rate limiting on login attempts (5 per 60s per email, if Redis available)
+    if redis_client:
+        try:
+            rl_key = f"login_rate:{user.email}"
+            count = await redis_client.incr(rl_key)
+            if count == 1:
+                await redis_client.expire(rl_key, RATE_WINDOW_SECONDS)
+            if count > RATE_LIMIT:
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many login attempts. Please wait 60 seconds."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     db_user = await prisma.user.find_unique(where={"email": user.email})
     if not db_user or not pwd_context.verify(user.password, db_user.password):
         raise HTTPException(status_code=400, detail="Invalid email or password")
@@ -519,10 +713,25 @@ async def add_test_case(
 
 
 @app.get("/problems/{problem_id}/testcases")
-async def get_problem_testcases(problem_id: str, include_hidden: bool = False):
+async def get_problem_testcases(
+    problem_id: str,
+    include_hidden: bool = False,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
     problem = await prisma.problem.find_unique(where={"id": problem_id})
     if not problem:
         raise HTTPException(status_code=404, detail="Problem not found")
+
+    # If requesting hidden test cases, require admin authentication
+    if include_hidden:
+        if not credentials:
+            raise HTTPException(status_code=401, detail="Authentication required to view hidden test cases")
+        try:
+            payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+            if payload.get("role") != "ADMIN":
+                raise HTTPException(status_code=403, detail="Admin access required to view hidden test cases")
+        except jwt.PyJWTError:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     where_filter = {"problemId": problem_id}
     if not include_hidden:
@@ -546,7 +755,20 @@ async def get_problem_testcases(problem_id: str, include_hidden: bool = False):
 
 @app.post("/run")
 async def run_code(req: CodeRun):
-    """Executes code directly against Judge0 with custom stdin for rapid testing in editor."""
+    """Executes code against Judge0 or local mock judge."""
+    # ── Mock judge mode ──
+    if MOCK_JUDGE:
+        result = mock_execute(req.source_code, req.language_id, req.stdin)
+        return {
+            "status": result["status"]["description"],
+            "stdout": result.get("stdout"),
+            "stderr": result.get("stderr"),
+            "compile_output": result.get("compile_output"),
+            "time": result.get("time"),
+            "memory": result.get("memory"),
+        }
+
+    # ── Real Judge0 ──
     if not http_client:
         raise HTTPException(status_code=503, detail="HTTP execution engine unavailable")
 
@@ -636,6 +858,8 @@ async def push_to_queue(
 
 @app.get("/judge0/languages")
 async def get_judge0_languages():
+    if MOCK_JUDGE:
+        return [{"id": k, "name": v["name"]} for k, v in MOCK_LANGS.items()]
     try:
         response = await http_client.get(f"{JUDGE0_URL}/languages")
         response.raise_for_status()
@@ -850,19 +1074,108 @@ async def submit_code(
         }
     )
 
-    # Queue the job
-    background_tasks.add_task(
-        push_to_queue,
-        new_submission.id,
-        submission.problem_id,
-        submission.source_code,
-        submission.language_id
+    # ── If Redis is available, queue for async grading ──
+    if redis_client:
+        background_tasks.add_task(
+            push_to_queue,
+            new_submission.id,
+            submission.problem_id,
+            submission.source_code,
+            submission.language_id
+        )
+        return {
+            "message": "Submission received and queued!",
+            "submission_id": new_submission.id,
+            "status": "PENDING"
+        }
+
+    # ── No Redis: grade synchronously (mock mode or real Judge0) ──
+    await prisma.submission.update(
+        where={"id": new_submission.id},
+        data={"status": "PROCESSING"}
+    )
+
+    test_cases = await prisma.testcase.find_many(
+        where={"problemId": submission.problem_id}
+    )
+
+    if not test_cases:
+        await prisma.submission.update(
+            where={"id": new_submission.id},
+            data={"status": "INTERNAL_ERROR", "stderr": "No test cases configured"}
+        )
+        return {"message": "No test cases", "submission_id": new_submission.id, "status": "INTERNAL_ERROR"}
+
+    final_status = "ACCEPTED"
+    last_stdout = None
+    last_stderr = None
+    last_compile = None
+    last_time = None
+    last_mem = None
+
+    for tc in test_cases:
+        if MOCK_JUDGE:
+            result = mock_execute(submission.source_code, submission.language_id, tc.input)
+        elif http_client:
+            try:
+                resp = await http_client.post(
+                    f"{JUDGE0_URL}/submissions?base64_encoded=false&wait=true",
+                    json={"source_code": submission.source_code, "language_id": submission.language_id, "stdin": tc.input},
+                    timeout=20.0
+                )
+                resp.raise_for_status()
+                result = resp.json()
+            except Exception as e:
+                final_status = "JUDGE0_UNAVAILABLE"
+                last_stderr = str(e)
+                break
+        else:
+            final_status = "JUDGE0_UNAVAILABLE"
+            last_stderr = "No execution engine available"
+            break
+
+        status_desc = result.get("status", {}).get("description", "Error") if isinstance(result.get("status"), dict) else result.get("status", "Error")
+        last_stdout = result.get("stdout")
+        last_stderr = result.get("stderr")
+        last_compile = result.get("compile_output")
+        last_time = result.get("time")
+        last_mem = result.get("memory")
+
+        if "Compilation" in status_desc or "Compilation" in str(result.get("status", "")):
+            final_status = "COMPILATION_ERROR"
+            break
+        if "Time Limit" in status_desc:
+            final_status = "TIME_LIMIT_EXCEEDED"
+            break
+        if "Runtime" in status_desc:
+            final_status = "RUNTIME_ERROR"
+            break
+        if status_desc != "Accepted":
+            final_status = status_desc.upper().replace(" ", "_")
+            break
+
+        actual = (last_stdout or "").replace("\r\n", "\n").strip()
+        expected = (tc.expectedOutput or "").replace("\r\n", "\n").strip()
+        if actual != expected:
+            final_status = "WRONG_ANSWER"
+            break
+
+    await prisma.submission.update(
+        where={"id": new_submission.id},
+        data={
+            "status": final_status,
+            "stdout": last_stdout,
+            "stderr": last_stderr,
+            "compileOutput": last_compile,
+            "executionTime": str(last_time) if last_time is not None else None,
+            "memory": last_mem,
+        }
     )
 
     return {
-        "message": "Submission received and queued!",
+        "message": "Submission graded!",
         "submission_id": new_submission.id,
-        "status": "PENDING"
+        "status": final_status
     }
 
 
@@ -1121,3 +1434,383 @@ async def get_contest_leaderboard(contest_id: str):
         "standings": ranked
     }
 
+
+
+# --------------------------------------------------
+# EDIT / DELETE PROBLEMS  (missing endpoints)
+# --------------------------------------------------
+
+class ProblemUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    difficulty: str | None = None
+
+
+@app.put("/admin/problems/{problem_id}")
+async def update_problem(
+    problem_id: str,
+    update: ProblemUpdate,
+    _admin: dict = Depends(require_admin)
+):
+    problem = await prisma.problem.find_unique(where={"id": problem_id})
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    data: dict = {}
+    if update.title is not None:
+        data["title"] = update.title
+    if update.description is not None:
+        data["description"] = update.description
+    if update.difficulty is not None:
+        data["difficulty"] = update.difficulty
+
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updated = await prisma.problem.update(where={"id": problem_id}, data=data)
+    return {"message": "Problem updated successfully", "problem": updated}
+
+
+@app.delete("/admin/problems/{problem_id}")
+async def delete_problem(
+    problem_id: str,
+    _admin: dict = Depends(require_admin)
+):
+    problem = await prisma.problem.find_unique(where={"id": problem_id})
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    # Delete related test cases first
+    await prisma.testcase.delete_many(where={"problemId": problem_id})
+    # Remove from any contests
+    await prisma.contestproblem.delete_many(where={"problemId": problem_id})
+    # Delete the problem
+    await prisma.problem.delete(where={"id": problem_id})
+
+    return {"message": f"Problem '{problem_id}' deleted successfully"}
+
+
+# --------------------------------------------------
+# EDIT / DELETE CONTESTS  (missing endpoints)
+# --------------------------------------------------
+
+class ContestUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+
+
+@app.put("/admin/contests/{contest_id}")
+async def update_contest(
+    contest_id: str,
+    update: ContestUpdate,
+    _admin: dict = Depends(require_admin)
+):
+    contest = await prisma.contest.find_unique(where={"id": contest_id})
+    if not contest:
+        raise HTTPException(status_code=404, detail="Contest not found")
+
+    data: dict = {}
+    if update.title is not None:
+        data["title"] = update.title
+    if update.description is not None:
+        data["description"] = update.description
+    if update.start_time is not None:
+        data["startTime"] = update.start_time
+    if update.end_time is not None:
+        data["endTime"] = update.end_time
+
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updated = await prisma.contest.update(where={"id": contest_id}, data=data)
+    return {"message": "Contest updated successfully", "contest": updated}
+
+
+@app.delete("/admin/contests/{contest_id}")
+async def delete_contest(
+    contest_id: str,
+    _admin: dict = Depends(require_admin)
+):
+    contest = await prisma.contest.find_unique(where={"id": contest_id})
+    if not contest:
+        raise HTTPException(status_code=404, detail="Contest not found")
+
+    # Remove contest–problem links
+    await prisma.contestproblem.delete_many(where={"contestId": contest_id})
+    # Delete the contest
+    await prisma.contest.delete(where={"id": contest_id})
+
+    return {"message": f"Contest '{contest_id}' deleted successfully"}
+
+
+# --------------------------------------------------
+# ADD / REMOVE PROBLEMS IN EXISTING CONTEST  (missing endpoint)
+# --------------------------------------------------
+
+class ContestProblemsUpdate(BaseModel):
+    problem_ids: list[str]
+
+
+@app.put("/admin/contests/{contest_id}/problems")
+async def update_contest_problems(
+    contest_id: str,
+    body: ContestProblemsUpdate,
+    _admin: dict = Depends(require_admin)
+):
+    contest = await prisma.contest.find_unique(where={"id": contest_id})
+    if not contest:
+        raise HTTPException(status_code=404, detail="Contest not found")
+
+    # Validate all problems exist
+    for pid in body.problem_ids:
+        p = await prisma.problem.find_unique(where={"id": pid})
+        if not p:
+            raise HTTPException(status_code=404, detail=f"Problem '{pid}' not found")
+
+    # Replace existing links
+    await prisma.contestproblem.delete_many(where={"contestId": contest_id})
+    for pid in body.problem_ids:
+        await prisma.contestproblem.create(
+            data={"contestId": contest_id, "problemId": pid}
+        )
+
+    return {
+        "message": f"Contest problems updated ({len(body.problem_ids)} problems)",
+        "contest_id": contest_id,
+        "problem_ids": body.problem_ids
+    }
+
+
+# --------------------------------------------------
+# ADMIN: ALL SUBMISSIONS  (missing endpoint)
+# --------------------------------------------------
+
+@app.get("/admin/submissions")
+async def get_all_submissions(
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    problem_id: str | None = None,
+    contest_id: str | None = None,
+    _admin: dict = Depends(require_admin)
+):
+    where: dict = {}
+    if status:
+        where["status"] = status
+    if problem_id:
+        where["problemId"] = problem_id
+    if contest_id:
+        where["contestId"] = contest_id
+
+    total = await prisma.submission.count(where=where if where else None)
+    submissions = await prisma.submission.find_many(
+        where=where if where else None,
+        order={"createdAt": "desc"},
+        take=limit,
+        skip=offset
+    )
+
+    # Enrich with user email and problem title
+    result = []
+    for s in submissions:
+        user = await prisma.user.find_unique(where={"id": s.userId})
+        problem = await prisma.problem.find_unique(where={"id": s.problemId})
+        result.append({
+            "id": s.id,
+            "status": s.status,
+            "languageId": s.languageId,
+            "problemId": s.problemId,
+            "problemTitle": problem.title if problem else s.problemId,
+            "userId": s.userId,
+            "userEmail": user.email if user else s.userId,
+            "contestId": s.contestId,
+            "executionTime": s.executionTime,
+            "memory": s.memory,
+            "createdAt": s.createdAt
+        })
+
+    return {"total": total, "count": len(result), "submissions": result}
+
+
+# --------------------------------------------------
+# ADMIN: ALL USERS  (missing endpoint for participants page)
+# --------------------------------------------------
+
+@app.get("/admin/users")
+async def get_all_users(
+    limit: int = 50,
+    offset: int = 0,
+    _admin: dict = Depends(require_admin)
+):
+    total = await prisma.user.count()
+    users = await prisma.user.find_many(
+        order={"createdAt": "desc"},
+        take=limit,
+        skip=offset
+    )
+
+    result = []
+    for u in users:
+        submission_count = await prisma.submission.count(where={"userId": u.id})
+        accepted_count = await prisma.submission.count(
+            where={"userId": u.id, "status": "ACCEPTED"}
+        )
+        result.append({
+            "id": u.id,
+            "email": u.email,
+            "name": u.name or u.email.split("@")[0],
+            "role": u.role,
+            "createdAt": u.createdAt,
+            "submission_count": submission_count,
+            "accepted_count": accepted_count
+        })
+
+    return {"total": total, "count": len(result), "users": result}
+
+
+# --------------------------------------------------
+# TEST CASE EDIT / DELETE  (missing endpoints)
+# --------------------------------------------------
+
+class TestCaseUpdate(BaseModel):
+    input: str | None = None
+    expected_output: str | None = None
+    is_hidden: bool | None = None
+
+
+@app.put("/admin/problems/{problem_id}/testcases/{testcase_id}")
+async def update_testcase(
+    problem_id: str,
+    testcase_id: str,
+    update: TestCaseUpdate,
+    _admin: dict = Depends(require_admin)
+):
+    problem = await prisma.problem.find_unique(where={"id": problem_id})
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    tc = await prisma.testcase.find_unique(where={"id": testcase_id})
+    if not tc or tc.problemId != problem_id:
+        raise HTTPException(status_code=404, detail="Test case not found")
+
+    data: dict = {}
+    if update.input is not None:
+        data["input"] = update.input
+    if update.expected_output is not None:
+        data["expectedOutput"] = update.expected_output
+    if update.is_hidden is not None:
+        data["isHidden"] = update.is_hidden
+
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updated = await prisma.testcase.update(where={"id": testcase_id}, data=data)
+    return {
+        "message": "Test case updated",
+        "test_case": {
+            "id": updated.id,
+            "input": updated.input,
+            "expected_output": updated.expectedOutput,
+            "is_hidden": updated.isHidden
+        }
+    }
+
+
+@app.delete("/admin/problems/{problem_id}/testcases/{testcase_id}")
+async def delete_testcase(
+    problem_id: str,
+    testcase_id: str,
+    _admin: dict = Depends(require_admin)
+):
+    problem = await prisma.problem.find_unique(where={"id": problem_id})
+    if not problem:
+        raise HTTPException(status_code=404, detail="Problem not found")
+
+    tc = await prisma.testcase.find_unique(where={"id": testcase_id})
+    if not tc or tc.problemId != problem_id:
+        raise HTTPException(status_code=404, detail="Test case not found")
+
+    await prisma.testcase.delete(where={"id": testcase_id})
+    return {"message": f"Test case {testcase_id} deleted"}
+
+
+# --------------------------------------------------
+# ANALYTICS ENDPOINTS  (missing — for analytics page)
+# --------------------------------------------------
+
+@app.get("/admin/analytics/overview")
+async def get_analytics_overview(_admin: dict = Depends(require_admin)):
+    """Aggregated platform-wide stats."""
+    total_submissions = await prisma.submission.count()
+    accepted_submissions = await prisma.submission.count(where={"status": "ACCEPTED"})
+    total_problems = await prisma.problem.count()
+    total_contests = await prisma.contest.count()
+    total_users = await prisma.user.count(where={"role": "STUDENT"})
+
+    acceptance_rate = round(
+        (accepted_submissions / total_submissions * 100) if total_submissions > 0 else 0, 1
+    )
+
+    return {
+        "total_submissions": total_submissions,
+        "accepted_submissions": accepted_submissions,
+        "acceptance_rate": acceptance_rate,
+        "total_problems": total_problems,
+        "total_contests": total_contests,
+        "total_students": total_users,
+    }
+
+
+@app.get("/admin/analytics/problems")
+async def get_analytics_problems(_admin: dict = Depends(require_admin)):
+    """Per-problem attempt and acceptance stats."""
+    problems = await prisma.problem.find_many(order={"createdAt": "asc"})
+    result = []
+    for p in problems:
+        total_attempts = await prisma.submission.count(where={"problemId": p.id})
+        accepted = await prisma.submission.count(where={"problemId": p.id, "status": "ACCEPTED"})
+        rate = round((accepted / total_attempts * 100) if total_attempts > 0 else 0, 1)
+        result.append({
+            "id": p.id,
+            "title": p.title,
+            "difficulty": p.difficulty,
+            "total_attempts": total_attempts,
+            "accepted_count": accepted,
+            "acceptance_rate": rate,
+        })
+    # Sort by total attempts descending
+    result.sort(key=lambda x: x["total_attempts"], reverse=True)
+    return result
+
+
+@app.get("/admin/analytics/participation")
+async def get_analytics_participation(_admin: dict = Depends(require_admin)):
+    """Per-contest participation stats."""
+    contests = await prisma.contest.find_many(order={"startTime": "asc"})
+    now = datetime.now(timezone.utc)
+    result = []
+    for c in contests:
+        start = c.startTime.replace(tzinfo=timezone.utc) if c.startTime.tzinfo is None else c.startTime
+        end = c.endTime.replace(tzinfo=timezone.utc) if c.endTime.tzinfo is None else c.endTime
+        status = "UPCOMING" if now < start else ("LIVE" if now <= end else "ENDED")
+
+        # Unique participants who submitted in this contest
+        subs = await prisma.submission.find_many(where={"contestId": c.id})
+        unique_participants = len(set(s.userId for s in subs))
+        total_subs = len(subs)
+        accepted_subs = sum(1 for s in subs if s.status == "ACCEPTED")
+        problem_count = await prisma.contestproblem.count(where={"contestId": c.id})
+
+        result.append({
+            "id": c.id,
+            "title": c.title,
+            "status": status,
+            "startTime": c.startTime,
+            "problem_count": problem_count,
+            "unique_participants": unique_participants,
+            "total_submissions": total_subs,
+            "accepted_submissions": accepted_subs,
+        })
+    return result

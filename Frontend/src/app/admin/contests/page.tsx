@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { apiFetch, apiFetchSafe, API_BASE_URL, getAuthToken } from "@/lib/api";
+import { apiFetch, apiFetchSafe, getAuthToken } from "@/lib/api";
 import type { Contest, Problem } from "@/lib/types";
 import {
   LoadingSpinner, EmptyState, StatusBadge, ErrorBanner, SuccessBanner,
@@ -72,17 +72,15 @@ export default function AdminContestsPage() {
 
   async function handleDelete() {
     if (!deleteId) return;
-    // Backend does not have DELETE /admin/contests/{id} yet — document as missing
-    // Try anyway; if it fails, show error
     try {
-      await fetch(`${API_BASE_URL}/admin/contests/${deleteId}`, {
+      await apiFetch(`/admin/contests/${deleteId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        token: getAuthToken(),
       });
       setContests(contests.filter((c) => c.id !== deleteId));
       setToast({ msg: `Contest "${deleteTitle}" deleted.`, type: "success" });
-    } catch {
-      setToast({ msg: "Delete endpoint not available on backend yet.", type: "error" });
+    } catch (err: any) {
+      setToast({ msg: err.message || "Failed to delete contest.", type: "error" });
     }
     setDeleteId(null);
   }
@@ -216,7 +214,7 @@ export default function AdminContestsPage() {
       <ConfirmDialog
         open={!!deleteId}
         title="Delete Contest"
-        message={`Are you sure you want to delete "${deleteTitle}"? This action cannot be undone. Note: Requires a DELETE endpoint on the backend.`}
+        message={`Are you sure you want to delete "${deleteTitle}"? This action cannot be undone.`}
         confirmLabel="Delete"
         danger
         onConfirm={handleDelete}

@@ -1,30 +1,68 @@
 version: '3.8'
 
 services:
+  # ── PostgreSQL (production database) ──
   db:
     image: postgres:15-alpine
-    container_name: zerosjt-postgres
+    container_name: tic-postgres
     restart: always
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: vitpassword123
-      POSTGRES_DB: zerosjt
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vitpassword123}
+      POSTGRES_DB: ${POSTGRES_DB:-ticcontest}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # ── Redis (submission queue + rate limiting) ──
   redis:
     image: redis:7-alpine
-    container_name: zerosjt-redis
+    container_name: tic-redis
     restart: always
     ports:
       - "6379:6379"
-      - "6380:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes
 
+  # ── Judge0 Server (code execution engine) ──
+  judge0-server:
+    image: judge0/judge0:latest
+    container_name: tic-judge0
+    restart: always
+    ports:
+      - "2358:2358"
+    environment:
+      REDIS_URL: redis://redis:6379
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ticcontest}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vitpassword123}
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - judge0_data:/var/www/judge0-server
+
+  # ── Judge0 Workers (background submission processing) ──
+  judge0-workers:
+    image: judge0/judge0:latest
+    container_name: tic-judge0-workers
+    restart: always
+    command: ./scripts/workers
+    environment:
+      REDIS_URL: redis://redis:6379
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-ticcontest}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vitpassword123}
+    depends_on:
+      - judge0-server
+
 volumes:
   postgres_data:
   redis_data:
+  judge0_data:

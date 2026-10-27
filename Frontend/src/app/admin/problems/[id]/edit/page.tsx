@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { apiFetchSafe, apiFetch, getAuthToken, API_BASE_URL } from "@/lib/api";
+import { apiFetchSafe, apiFetch, getAuthToken } from "@/lib/api";
 import type { ProblemDetail } from "@/lib/types";
 import { LoadingSpinner, ErrorBanner, SuccessBanner } from "@/components/admin/AdminUI";
 
@@ -48,27 +48,19 @@ export default function AdminEditProblemPage() {
 
     setSaving(true);
     try {
-      // Backend does not have PUT /admin/problems/{id} yet — document as missing
-      const res = await fetch(`${API_BASE_URL}/admin/problems/${problemId}`, {
+      await apiFetch(`/admin/problems/${problemId}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${getAuthToken()}`,
-        },
         body: JSON.stringify({
           title: title.trim(),
           description: description.trim(),
           difficulty,
         }),
+        token: getAuthToken(),
       });
-      if (res.ok) {
-        setSuccess("Problem updated successfully.");
-        setTimeout(() => router.push(`/admin/problems/${problemId}`), 1500);
-      } else {
-        setError("Failed to update problem. The backend may not support PUT /admin/problems/{id} yet.");
-      }
-    } catch {
-      setError("Failed to reach backend.");
+      setSuccess("Problem updated successfully.");
+      setTimeout(() => router.push(`/admin/problems/${problemId}`), 1200);
+    } catch (err: any) {
+      setError(err.message || "Failed to update problem.");
     } finally {
       setSaving(false);
     }
@@ -97,7 +89,12 @@ export default function AdminEditProblemPage() {
       </div>
 
       <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Edit Problem</h1>
-      <p className="mt-1.5 text-xs text-zinc-400">Update problem details.</p>
+      <p className="mt-1.5 text-xs text-zinc-400">
+        Update problem details. Manage test cases on the{" "}
+        <Link href={`/admin/problems/${problemId}`} className="text-zinc-300 underline">
+          problem detail page
+        </Link>.
+      </p>
 
       <div className="mt-8 max-w-3xl rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-6">
         {error && <div className="mb-4"><ErrorBanner message={error} /></div>}
@@ -108,14 +105,15 @@ export default function AdminEditProblemPage() {
             <label className="block text-[11px] font-medium text-zinc-400 mb-1">Problem ID</label>
             <input
               type="text" disabled value={problem.id}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs font-mono text-zinc-500"
+              className="w-full rounded-md border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs font-mono text-zinc-500 cursor-not-allowed"
             />
           </div>
 
           <div>
             <label className="block text-[11px] font-medium text-zinc-400 mb-1">Title</label>
             <input
-              type="text" required value={title} onChange={(e) => setTitle(e.target.value)}
+              type="text" required value={title}
+              onChange={(e) => setTitle(e.target.value)}
               className="w-full rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs text-zinc-200 focus:border-zinc-500 focus:outline-none"
             />
           </div>
@@ -135,15 +133,10 @@ export default function AdminEditProblemPage() {
           <div>
             <label className="block text-[11px] font-medium text-zinc-400 mb-1">Description & Constraints</label>
             <textarea
-              required rows={8} value={description} onChange={(e) => setDescription(e.target.value)}
-              className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-200 focus:border-zinc-500 focus:outline-none"
+              required rows={8} value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-200 focus:border-zinc-500 focus:outline-none resize-y"
             />
-          </div>
-
-          <div className="rounded-lg border border-zinc-800/60 bg-zinc-950/50 p-3">
-            <p className="text-[11px] text-zinc-500 leading-relaxed">
-              <span className="font-mono text-zinc-400">Note:</span> Problem editing requires a backend PUT /admin/problems/{`{id}`} endpoint. Test case management is done on the problem detail page via POST /admin/problems/{`{id}`}/testcases.
-            </p>
           </div>
 
           <div className="flex items-center gap-3 pt-2">

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
-import { apiFetchSafe, API_BASE_URL, getAuthToken } from "@/lib/api";
+import { apiFetch, apiFetchSafe, getAuthToken } from "@/lib/api";
 import type { Problem } from "@/lib/types";
 import {
   LoadingSpinner, EmptyState, DifficultyBadge, ConfirmDialog, Toast, Pagination,
@@ -48,20 +48,15 @@ export default function AdminProblemsPage() {
 
   async function handleDelete() {
     if (!deleteId) return;
-    // Backend does not have DELETE /admin/problems/{id} yet
     try {
-      const res = await fetch(`${API_BASE_URL}/admin/problems/${deleteId}`, {
+      await apiFetch(`/admin/problems/${deleteId}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${getAuthToken()}` },
+        token: getAuthToken(),
       });
-      if (res.ok) {
-        setProblems(problems.filter((p) => p.id !== deleteId));
-        setToast({ msg: `Problem "${deleteTitle}" deleted.`, type: "success" });
-      } else {
-        setToast({ msg: "Delete endpoint not available on backend yet.", type: "error" });
-      }
-    } catch {
-      setToast({ msg: "Delete endpoint not available on backend yet.", type: "error" });
+      setProblems(problems.filter((p) => p.id !== deleteId));
+      setToast({ msg: `Problem "${deleteTitle}" deleted successfully.`, type: "success" });
+    } catch (err: any) {
+      setToast({ msg: err.message || "Failed to delete problem.", type: "error" });
     }
     setDeleteId(null);
   }
@@ -183,7 +178,7 @@ export default function AdminProblemsPage() {
       <ConfirmDialog
         open={!!deleteId}
         title="Delete Problem"
-        message={`Delete "${deleteTitle}"? This removes the problem and its test cases. Note: Requires a DELETE endpoint on the backend.`}
+        message={`Delete "${deleteTitle}"? This removes the problem and all its test cases. This cannot be undone.`}
         confirmLabel="Delete"
         danger
         onConfirm={handleDelete}

@@ -1,77 +1,108 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { apiFetchSafe, API_BASE_URL, getAuthToken } from "@/lib/api";
-import type { LeaderboardUser, UserStats, Submission } from "@/lib/types";
+import { apiFetch, apiFetchSafe } from "@/lib/api";
+import type { UserStats, Submission } from "@/lib/types";
 import {
-  LoadingSpinner, EmptyState, Pagination,
+  LoadingSpinner, EmptyState, ErrorBanner, Pagination,
 } from "@/components/admin/AdminUI";
 
-interface ParticipantRow extends LeaderboardUser {
-  email?: string;
-  stats?: UserStats;
+interface AdminUser {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  createdAt: string;
+  submission_count: number;
+  accepted_count: number;
 }
 
+interface UsersResponse {
+  total: number;
+  count: number;
+  users: AdminUser[];
+}
+
+const LANG_MAP: Record<number, string> = {
+  71: "Python 3", 54: "C++", 62: "Java", 63: "JavaScript", 74: "TypeScript", 50: "C",
+};
+
 export default function AdminParticipantsPage() {
-  const [participants, setParticipants] = useState<ParticipantRow[]>([]);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"rank" | "name" | "solved">("rank");
+  const [roleFilter, setRoleFilter] = useState("ALL");
+  const [sortBy, setSortBy] = useState<"name" | "accepted" | "joined">("joined");
   const [page, setPage] = useState(1);
-  const [viewUserId, setViewUserId] = useState<string | null>(null);
+  const ITEMS_PER_PAGE = 12;
+
+  const [viewUser, setViewUser] = useState<AdminUser | null>(null);
   const [userSubs, setUserSubs] = useState<Submission[]>([]);
   const [userStats, setUserStats] = useState<UserStats | null>(null);
-  const [modalLoading, setModalLoading] = useState(true);
-  const ITEMS_PER_PAGE = 12;
+  const [modalLoading, setModalLoading] = useState(false);
 
   useEffect(() => {
     async function load() {
-      // The backend only has /leaderboard which returns users who have ACCEPTED submissions.
-      // There is no /users endpoint to list all registered users.
-      const lbData = await apiFetchSafe<{ leaderboard: LeaderboardUser[] }>("/leaderboard");
-      if (lbData?.leaderboard) {
-        const rows: ParticipantRow[] = lbData.leaderboard.map((u) => ({ ...u }));
-        setParticipants(rows);
+      setLoading(true);
+      setError("");
+      try {
+        const data = await apiFetch<UsersResponse>(`/admin/users?limit=200`);
+        setUsers(data.users);
+        setTotal(data.total);
+      } catch (err: any) {
+        setError(err.message || "Failed to load users");
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     }
     load();
   }, []);
 
   const filtered = useMemo(() => {
-    let result = participants;
+    let result = users;
+    if (roleFilter !== "ALL") result = result.filter((u) => u.role === roleFilter);
     if (search) {
       const q = search.toLowerCase();
-      result = result.filter((p) => p.username.toLowerCase().includes(q) || p.userId.toLowerCase().includes(q));
+      result = result.filter(
+        (u) =>
+          u.name.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q) ||
+          u.id.toLowerCase().includes(q),
+      );
     }
     result = [...result].sort((a, b) => {
-      if (sortBy === "name") return a.username.localeCompare(b.username);
-      if (sortBy === "solved") return b.accepted_count - a.accepted_count;
-      return a.rank - b.rank;
+      if (sortBy === "name") return a.name.localeCompare(b.name);
+      if (sortBy === "accepted") return b.accepted_count - a.accepted_count;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
     return result;
-  }, [participants, search, sortBy]);
+  }, [users, search, roleFilter, sortBy]);
 
   const totalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
   const paged = filtered.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE);
 
-  async function openParticipant(userId: string) {
-    setViewUserId(userId);
+  async function openParticipant(user: AdminUser) {
+    setViewUser(user);
     setModalLoading(true);
+    setUserSubs([]);
+    setUserStats(null);
     const [subsData, statsData] = await Promise.all([
-      apiFetchSafe<{ count: number; submissions: Submission[] }>(`/users/${userId}/submissions`),
-      apiFetchSafe<UserStats>(`/users/${userId}/stats`),
+      apiFetchSafe<{ count: number; submissions: Submission[] }>(`/users/${user.id}/submissions`),
+      apiFetchSafe<UserStats>(`/users/${user.id}/stats`),
     ]);
-    if (subsData?.submissions) setUserSubs(subsData.submissions);
-    else setUserSubs([]);
+    if (subsData?.submissions) setUserSubs(subsData.submissions.slice(0, 20));
     if (statsData) setUserStats(statsData);
-    else setUserStats(null);
     setModalLoading(false);
   }
 
   function exportCSV() {
-    const headers = ["Rank", "Username", "User ID", "Accepted Count"];
-    const rows = filtered.map((p) => [p.rank, p.username, p.userId, p.accepted_count].join(","));
+    const headers = ["Name", "Email", "Role", "Accepted", "Submissions", "Joined"];
+    const rows = filtered.map((u) =>
+      [u.name, u.email, u.role, u.accepted_count, u.submission_count, new Date(u.createdAt).toLocaleDateString()].join(","),
+    );
     const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
@@ -90,7 +121,9 @@ export default function AdminParticipantsPage() {
       <div className="mb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">Participants</h1>
-          <p className="mt-1.5 text-xs text-zinc-400">View registered students and their contest participation.</p>
+          <p className="mt-1.5 text-xs text-zinc-400">
+            All registered users — {total} total.
+          </p>
         </div>
         <button
           onClick={exportCSV}
@@ -101,12 +134,7 @@ export default function AdminParticipantsPage() {
         </button>
       </div>
 
-      {/* Info note */}
-      <div className="mb-6 rounded-lg border border-zinc-800/60 bg-zinc-900/20 p-4">
-        <p className="text-[11px] text-zinc-500 leading-relaxed">
-          <span className="font-mono text-zinc-400">Note:</span> The backend does not have a dedicated <code className="font-mono text-zinc-400">GET /users</code> endpoint. Participants shown here are those with at least one accepted submission from the leaderboard. A full user list requires a backend endpoint.
-        </p>
-      </div>
+      {error && <div className="mb-6"><ErrorBanner message={error} /></div>}
 
       {/* Filters */}
       <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -114,23 +142,32 @@ export default function AdminParticipantsPage() {
           type="text"
           value={search}
           onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-          placeholder="Search by name or user ID..."
+          placeholder="Search by name, email, or ID..."
           className="flex-1 rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-200 placeholder-zinc-500 focus:border-zinc-600 focus:outline-none"
         />
+        <select
+          value={roleFilter}
+          onChange={(e) => { setRoleFilter(e.target.value); setPage(1); }}
+          className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
+        >
+          <option value="ALL">All Roles</option>
+          <option value="STUDENT">Students</option>
+          <option value="ADMIN">Admins</option>
+        </select>
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as any)}
           className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-200 focus:border-zinc-600 focus:outline-none"
         >
-          <option value="rank">Sort by Rank</option>
+          <option value="joined">Sort by Joined</option>
           <option value="name">Sort by Name</option>
-          <option value="solved">Sort by Solved</option>
+          <option value="accepted">Sort by Accepted</option>
         </select>
       </div>
 
       {/* Table */}
       {filtered.length === 0 ? (
-        <EmptyState title="No participants found" description="No users have accepted submissions yet." />
+        <EmptyState title="No participants found" description="No users match the current filters." />
       ) : (
         <>
           <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/30 overflow-hidden">
@@ -138,23 +175,37 @@ export default function AdminParticipantsPage() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b border-zinc-800 text-[11px] font-mono uppercase text-zinc-500">
-                    <th className="px-5 py-3 text-left">Rank</th>
-                    <th className="px-5 py-3 text-left">Username</th>
-                    <th className="px-5 py-3 text-left">User ID</th>
+                    <th className="px-5 py-3 text-left">Name</th>
+                    <th className="px-5 py-3 text-left">Email</th>
+                    <th className="px-5 py-3 text-center">Role</th>
                     <th className="px-5 py-3 text-center">Accepted</th>
+                    <th className="px-5 py-3 text-center">Submissions</th>
+                    <th className="px-5 py-3 text-left">Joined</th>
                     <th className="px-5 py-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-800/60">
-                  {paged.map((p) => (
-                    <tr key={p.userId} className="hover:bg-zinc-900/40 transition">
-                      <td className="px-5 py-3 font-mono font-bold text-zinc-400">#{p.rank}</td>
-                      <td className="px-5 py-3 font-medium text-zinc-200">{p.username}</td>
-                      <td className="px-5 py-3 font-mono text-zinc-500 truncate max-w-[180px]">{p.userId}</td>
-                      <td className="px-5 py-3 text-center font-mono text-zinc-300">{p.accepted_count}</td>
+                  {paged.map((u) => (
+                    <tr key={u.id} className="hover:bg-zinc-900/40 transition">
+                      <td className="px-5 py-3 font-medium text-zinc-200">{u.name}</td>
+                      <td className="px-5 py-3 text-zinc-400 font-mono text-[11px]">{u.email}</td>
+                      <td className="px-5 py-3 text-center">
+                        <span className={`rounded px-1.5 py-0.5 text-[9px] font-mono uppercase border ${
+                          u.role === "ADMIN"
+                            ? "bg-zinc-800 text-zinc-200 border-zinc-700"
+                            : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                        }`}>
+                          {u.role}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-center font-mono text-emerald-400">{u.accepted_count}</td>
+                      <td className="px-5 py-3 text-center font-mono text-zinc-400">{u.submission_count}</td>
+                      <td className="px-5 py-3 text-zinc-500 font-mono text-[11px]">
+                        {new Date(u.createdAt).toLocaleDateString()}
+                      </td>
                       <td className="px-5 py-3 text-right">
                         <button
-                          onClick={() => openParticipant(p.userId)}
+                          onClick={() => openParticipant(u)}
                           className="rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 transition"
                         >
                           View Profile
@@ -171,55 +222,66 @@ export default function AdminParticipantsPage() {
       )}
 
       {/* Participant Detail Modal */}
-      {viewUserId && (
+      {viewUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
-            <button onClick={() => setViewUserId(null)} className="absolute right-4 top-4 text-zinc-500 hover:text-zinc-200 text-xs">✕</button>
-            <h2 className="text-base font-semibold text-zinc-100">Participant Profile</h2>
-            <p className="mt-1 text-[11px] font-mono text-zinc-500">User ID: {viewUserId}</p>
+            <button
+              onClick={() => setViewUser(null)}
+              className="absolute right-4 top-4 text-zinc-500 hover:text-zinc-200 text-xs"
+            >
+              ✕
+            </button>
+            <h2 className="text-base font-semibold text-zinc-100">{viewUser.name}</h2>
+            <p className="mt-0.5 text-[11px] font-mono text-zinc-500">{viewUser.email} · {viewUser.id}</p>
 
             {modalLoading ? (
               <div className="py-12 text-center"><LoadingSpinner label="Loading profile..." /></div>
             ) : (
-              <div className="mt-5 space-y-6">
+              <div className="mt-5 space-y-5">
                 {/* Stats */}
-                {userStats ? (
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
-                      <p className="text-[10px] font-mono uppercase text-zinc-500">Total Attempts</p>
-                      <p className="mt-1 text-lg font-bold font-mono text-zinc-100">{userStats.total_attempts}</p>
-                    </div>
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
-                      <p className="text-[10px] font-mono uppercase text-zinc-500">Accepted</p>
-                      <p className="mt-1 text-lg font-bold font-mono text-emerald-400">{userStats.accepted_attempts}</p>
-                    </div>
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
-                      <p className="text-[10px] font-mono uppercase text-zinc-500">Win Rate</p>
-                      <p className="mt-1 text-lg font-bold font-mono text-zinc-100">{userStats.win_rate_percentage}%</p>
-                    </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
+                    <p className="text-[10px] font-mono uppercase text-zinc-500">Total Attempts</p>
+                    <p className="mt-1 text-xl font-bold font-mono text-zinc-100">
+                      {userStats?.total_attempts ?? viewUser.submission_count}
+                    </p>
                   </div>
-                ) : (
-                  <p className="text-xs text-zinc-500">No stats available. Backend may not have this user's records.</p>
-                )}
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
+                    <p className="text-[10px] font-mono uppercase text-zinc-500">Accepted</p>
+                    <p className="mt-1 text-xl font-bold font-mono text-emerald-400">
+                      {userStats?.accepted_attempts ?? viewUser.accepted_count}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 text-center">
+                    <p className="text-[10px] font-mono uppercase text-zinc-500">Win Rate</p>
+                    <p className="mt-1 text-xl font-bold font-mono text-zinc-100">
+                      {userStats?.win_rate_percentage ?? "—"}%
+                    </p>
+                  </div>
+                </div>
 
-                {/* Submissions */}
+                {/* Recent Submissions */}
                 <div>
-                  <h3 className="text-xs font-semibold text-zinc-200 mb-3">Recent Submissions ({userSubs.length})</h3>
+                  <h3 className="text-xs font-semibold text-zinc-200 mb-3">
+                    Recent Submissions ({userSubs.length})
+                  </h3>
                   {userSubs.length > 0 ? (
-                    <div className="space-y-2 max-h-60 overflow-y-auto">
-                      {userSubs.slice(0, 20).map((s) => (
-                        <div key={s.id} className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-mono text-zinc-400">{s.problemId}</span>
-                            <span className={`rounded px-1.5 py-0.5 text-[9px] font-mono ${
-                              s.status === "ACCEPTED" ? "bg-emerald-950/30 text-emerald-400" : "bg-red-950/30 text-red-400"
-                            }`}>
-                              {s.status}
-                            </span>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                      {userSubs.map((s) => (
+                        <div key={s.id} className="rounded-lg border border-zinc-800 bg-zinc-950/50 p-3 flex items-center justify-between">
+                          <div>
+                            <span className="text-xs font-mono text-zinc-300">{s.problemId}</span>
+                            <p className="mt-0.5 text-[10px] font-mono text-zinc-500">
+                              {LANG_MAP[s.languageId] || `#${s.languageId}`} · {new Date(s.createdAt).toLocaleString()}
+                            </p>
                           </div>
-                          <p className="mt-1 text-[10px] font-mono text-zinc-500">
-                            Lang: {s.languageId} · {new Date(s.createdAt).toLocaleString()}
-                          </p>
+                          <span className={`rounded px-1.5 py-0.5 text-[9px] font-mono border ${
+                            s.status === "ACCEPTED"
+                              ? "bg-emerald-950/30 text-emerald-400 border-emerald-900/40"
+                              : "bg-red-950/30 text-red-400 border-red-900/40"
+                          }`}>
+                            {s.status}
+                          </span>
                         </div>
                       ))}
                     </div>

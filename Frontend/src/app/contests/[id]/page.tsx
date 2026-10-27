@@ -5,10 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import AuthGuard from "@/components/AuthGuard";
-<<<<<<< HEAD
-=======
 import { API_BASE_URL } from "@/lib/api";
->>>>>>> vaidehi-local
 
 interface ContestProblem {
   id: string;
@@ -46,23 +43,21 @@ export default function ContestArenaPage() {
   const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number } | null>(null);
   const [contestStatus, setContestStatus] = useState<"UPCOMING" | "LIVE" | "ENDED">("LIVE");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
     async function loadContestData() {
       try {
         const [contestRes, standingsRes] = await Promise.all([
-<<<<<<< HEAD
-          fetch(`http://localhost:8000/contests/${contestId}`),
-          fetch(`http://localhost:8000/contests/${contestId}/leaderboard`),
-=======
           fetch(`${API_BASE_URL}/contests/${contestId}`),
           fetch(`${API_BASE_URL}/contests/${contestId}/leaderboard`),
->>>>>>> vaidehi-local
         ]);
 
         if (contestRes.ok) {
           const cData = await contestRes.json();
           setContest(cData);
+        } else {
+          setLoadError("Contest not found.");
         }
 
         if (standingsRes.ok) {
@@ -72,43 +67,7 @@ export default function ContestArenaPage() {
           }
         }
       } catch {
-        // Fallback demo data
-        setContest({
-          id: contestId,
-          title: "TIC Weekly Contest #1",
-          description: "Solve 2 algorithmic challenges within the round window. Fast submissions with minimal attempts rank highest.",
-          startTime: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-          endTime: new Date(Date.now() + 1000 * 60 * 65).toISOString(),
-          problems: [
-            { id: "two-sum", title: "Two Sum", difficulty: "Easy", points: 100 },
-            { id: "reverse-string", title: "Reverse String", difficulty: "Easy", points: 100 },
-          ],
-        });
-        setStandings([
-          {
-            rank: 1,
-            userId: "u-1",
-            username: "sumit.coder",
-            problems_solved: 2,
-            total_points: 200,
-            total_penalty_minutes: 42,
-            problem_results: {
-              "two-sum": { solved: true, attempts: 1 },
-              "reverse-string": { solved: true, attempts: 1 },
-            },
-          },
-          {
-            rank: 2,
-            userId: "u-2",
-            username: "mansi.dev",
-            problems_solved: 1,
-            total_points: 100,
-            total_penalty_minutes: 18,
-            problem_results: {
-              "two-sum": { solved: true, attempts: 2 },
-            },
-          },
-        ]);
+        setLoadError("Could not reach the server. Check your connection.");
       } finally {
         setLoading(false);
       }
@@ -156,6 +115,21 @@ export default function ContestArenaPage() {
       <main className="min-h-screen bg-zinc-950 text-zinc-100 selection:bg-zinc-800 selection:text-zinc-100">
       <Navbar />
 
+      {loading ? (
+        <div className="flex items-center justify-center py-32">
+          <div className="flex flex-col items-center gap-3">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-zinc-800 border-t-zinc-400" />
+            <p className="text-xs text-zinc-500 font-mono">Loading contest…</p>
+          </div>
+        </div>
+      ) : loadError ? (
+        <div className="mx-auto max-w-lg px-6 py-28 text-center">
+          <p className="text-sm text-zinc-300 font-semibold">{loadError}</p>
+          <Link href="/contests" className="mt-4 inline-block text-xs text-zinc-400 hover:text-zinc-200 underline">
+            ← Back to Contests
+          </Link>
+        </div>
+      ) : (
       <div className="mx-auto max-w-6xl px-5 py-10 lg:px-8">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-xs text-zinc-500 mb-6">
@@ -384,6 +358,7 @@ export default function ContestArenaPage() {
           </div>
         )}
       </div>
+      )} {/* end loading/error conditional */}
     </main>
   </AuthGuard>
   );
